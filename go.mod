@@ -1,4 +1,4 @@
-module github.com/leehinman/mock-es
+module github.com/elastic/mock-es
 
 go 1.21.9
 
