@@ -35,8 +35,8 @@ Options are used to change the behavior.
 |---------------------|-----------------------------------------------------------------------------------------------|
 | -addr string        | address to listen on ip:port (default ":9200")                                                |
 | -clusteruuid string | Cluster UUID of Elasticsearch we are mocking, needed if beat is being monitored by metricbeat |
-| -metrics duration   | Interval to print metrics to stdout, 0 is no metrics                                          |
-| -delay duration     | Golang Duration to wait before processing API request, 0 is no delay                          |
+| -metrics duration   | Go 'time.Duration' to wait between printing metrics to stdout, 0 is no metrics                |
+| -delay duration     | Go 'time.Duration' to wait before processing API request, 0 is no delay                       |
 
 
 ### TLS Options
