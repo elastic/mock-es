@@ -14,7 +14,7 @@ You are developing a feature that splits the batch when `StatusEntityTooLarge` i
 ## Building the CLI server
 
 ```
-git clone https://github.com/leehinman/mock-es.git
+git clone https://github.com/elastic/mock-es.git
 cd mock-es/cmd/mock-es
 go build
 ```
@@ -36,6 +36,7 @@ Options are used to change the behavior.
 | -addr string        | address to listen on ip:port (default ":9200")                                                |
 | -clusteruuid string | Cluster UUID of Elasticsearch we are mocking, needed if beat is being monitored by metricbeat |
 | -metrics duration   | Interval to print metrics to stdout, 0 is no metrics                                          |
+| -delay duration     | Golang Duration to wait before processing API request, 0 is no delay                          |
 
 
 ### TLS Options
@@ -78,8 +79,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/elastic/mock-es/pkg/api"
 	"github.com/google/uuid"
-	"github.com/leehinman/mock-es/pkg/api"
 	"github.com/rcrowley/go-metrics"
 )
 

@@ -29,6 +29,7 @@ type APIHandler struct {
 	UUID          uuid.UUID
 	ClusterUUID   string
 	Expire        time.Time
+	Delay         time.Duration
 	bulkTotal     metrics.Counter
 	bulkDuplicate metrics.Counter
 	bulkTooMany   metrics.Counter
@@ -43,8 +44,8 @@ type APIHandler struct {
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
-func NewAPIHandler(uuid uuid.UUID, clusterUUID string, metricsRegistry metrics.Registry, expire time.Time, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
-	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID}
+func NewAPIHandler(uuid uuid.UUID, clusterUUID string, metricsRegistry metrics.Registry, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
+	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
 	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
 		panic(fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds)))
 	}
@@ -106,8 +107,9 @@ func NewAPIHandler(uuid uuid.UUID, clusterUUID string, metricsRegistry metrics.R
 	return h
 }
 
-//ServeHTTP looks at the request and routes it to the correct handler function
+// ServeHTTP looks at the request and routes it to the correct handler function
 func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	time.Sleep(h.Delay)
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/":
 		h.Root(w, r)
