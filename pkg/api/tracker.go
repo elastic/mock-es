@@ -1,6 +1,9 @@
 package api
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 // UserAgentTracker is a simple async hashmap that
 // tracks the reported User-Agent strings
@@ -55,5 +58,10 @@ func (uat *UserAgentTracker) Get() UserAgentMaps {
 	uat.lock.RLock()
 	defer uat.lock.RUnlock()
 
-	return uat.userAgentsSeen
+	new := UserAgentMaps{
+		license: maps.Clone(uat.userAgentsSeen.license),
+		root:    maps.Clone(uat.userAgentsSeen.root),
+		bulk:    maps.Clone(uat.userAgentsSeen.bulk),
+	}
+	return new
 }
