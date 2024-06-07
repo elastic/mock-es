@@ -30,6 +30,7 @@ type APIHandler struct {
 	ClusterUUID   string
 	Expire        time.Time
 	Delay         time.Duration
+	UserAgents    *UserAgentTracker
 	bulkTotal     metrics.Counter
 	bulkDuplicate metrics.Counter
 	bulkTooMany   metrics.Counter
@@ -45,9 +46,9 @@ type APIHandler struct {
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
 func NewAPIHandler(uuid uuid.UUID, clusterUUID string, metricsRegistry metrics.Registry, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
-	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
+	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay, UserAgents: NewUserAgentTracker()}
 	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
-		panic(fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds)))
+		panic(fmt.Errorf("total of percents can't be greater than %d", len(h.ActionOdds)))
 	}
 	if int(percentTooLarge) > len(h.MethodOdds) {
 		panic(fmt.Errorf("percent TooLarge cannot be greater than %d", len(h.MethodOdds)))
@@ -128,6 +129,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Bulk handles bulk posts
 func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
+	ua := useragent.Parse(r.Header.Get("User-Agent")).String
+	h.UserAgents.BulkSeen(ua)
 	h.bulkTotal.Inc(1)
 	methodStatus := h.MethodOdds[rand.Intn(len(h.MethodOdds))]
 	if methodStatus == http.StatusRequestEntityTooLarge {
@@ -210,28 +213,30 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 		log.Printf("error marshal bulk reply: %s", err)
 		return
 	}
-	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.Write(brBytes)
-	return
 }
 
 // Root handles / get requests
 func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
+	ua := useragent.Parse(r.Header.Get("User-Agent")).String
+	h.UserAgents.RootSeen(ua)
 	h.rootTotal.Inc(1)
 	version := parseUserAgent(r.Header.Get("User-Agent"))
 	root := fmt.Sprintf("{\"name\" : \"mock\", \"cluster_uuid\" : \"%s\", \"version\" : { \"number\" : \"%s\", \"build_flavor\" : \"default\"}}", h.ClusterUUID, version)
-	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(root))
-	return
 }
 
 // License handles /_license get requests
 func (h *APIHandler) License(w http.ResponseWriter, r *http.Request) {
+	ua := useragent.Parse(r.Header.Get("User-Agent")).String
+	h.UserAgents.LicenseSeen(ua)
 	h.licenseTotal.Inc(1)
 	license := fmt.Sprintf("{\"license\" : {\"status\" : \"active\", \"uid\" : \"%s\", \"type\" : \"trial\", \"expiry_date_in_millis\" : %d}}", h.UUID.String(), h.Expire.UnixMilli())
-	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(license))
-	return
+
 }
 
 func parseUserAgent(agentString string) string {
