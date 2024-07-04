@@ -92,8 +92,12 @@ func NewAPIHandler(uuid uuid.UUID, clusterUUID string, metricsRegistry metrics.R
 func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(h.Delay)
 	ua := useragent.Parse(r.Header.Get("User-Agent"))
-	incrementCounter("user_agent."+ ua.String + ".total", h.metricsRegistry)
-	incrementCounter("user_agent."+ ua.String + "." + r.URL.Path, h.metricsRegistry)
+	incrementCounter("user_agent."+ua.String+".total", h.metricsRegistry)
+	incrementCounter("user_agent."+ua.String+"."+r.URL.Path, h.metricsRegistry)
+
+	// required for official clients to recognize this as a valid endpoint.
+	w.Header().Set("X-Elastic-Product", "Elasticsearch")
+
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/":
 		h.Root(w, r)
