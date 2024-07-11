@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mileusna/useragent"
 	"github.com/rcrowley/go-metrics"
 )
@@ -40,7 +39,7 @@ type BulkResponse struct {
 type APIHandler struct {
 	ActionOdds      [100]int
 	MethodOdds      [100]int
-	UUID            uuid.UUID
+	UUID            fmt.Stringer
 	ClusterUUID     string
 	Expire          time.Time
 	Delay           time.Duration
@@ -48,7 +47,7 @@ type APIHandler struct {
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
-func NewAPIHandler(uuid uuid.UUID, clusterUUID string, metricsRegistry metrics.Registry, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
+func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, metricsRegistry metrics.Registry, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
 	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay, metricsRegistry: metricsRegistry}
 	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
 		panic(fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds)))
