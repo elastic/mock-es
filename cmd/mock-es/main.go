@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/elastic/mock-es/pkg/api"
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/rcrowley/go-metrics"
 )
 
@@ -39,7 +39,7 @@ func init() {
 	flag.StringVar(&keyFile, "keyfile", "", "path to PEM private key file, empty sting is no TLS")
 	flag.DurationVar(&delay, "delay", 0, "Go 'time.Duration' to wait before processing API request, 0 is no delay")
 
-	uid = uuid.New()
+	uid = uuid.Must(uuid.NewV4())
 	expire = time.Now().Add(24 * time.Hour)
 	flag.Parse()
 	if (percentDuplicate + percentTooMany + percentNonIndex) > 100 {
