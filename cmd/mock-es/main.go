@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/elastic/mock-es/pkg/api"
 	"github.com/gofrs/uuid/v5"
-	"github.com/rcrowley/go-metrics"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 var (
@@ -52,12 +55,33 @@ func init() {
 
 func main() {
 	mux := http.NewServeMux()
+	var provider metric.MeterProvider
 
 	if metricsInterval > 0 {
-		go metrics.WriteJSON(metrics.DefaultRegistry, metricsInterval, os.Stdout)
+		rdr := sdkmetric.NewManualReader()
+		provider = sdkmetric.NewMeterProvider(
+			sdkmetric.WithReader(rdr),
+		)
+
+		go func() {
+			for range time.Tick(metricsInterval) {
+				rm := metricdata.ResourceMetrics{}
+				err := rdr.Collect(context.Background(), &rm)
+
+				if err != nil {
+					log.Fatalf("failed to collect metrics: %v", err)
+				}
+
+				for _, sm := range rm.ScopeMetrics {
+					for _, m := range sm.Metrics {
+						log.Println(fmt.Sprintf("%s: %v", m.Name, m.Data.(metricdata.Sum[int64]).DataPoints[0].Value))
+					}
+				}
+			}
+		}()
 	}
 
-	mux.Handle("/", api.NewAPIHandler(uid, clusterUUID, metrics.DefaultRegistry, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge))
+	mux.Handle("/", api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge))
 
 	switch {
 	case certFile != "" && keyFile != "":
