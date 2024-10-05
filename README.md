@@ -81,12 +81,11 @@ import (
 
 	"github.com/elastic/mock-es/pkg/api"
 	"github.com/gofrs/uuid/v5"
-	"github.com/rcrowley/go-metrics"
 )
 
 func main() {
 	mux := http.NewServeMux()
-	mux.Handle("/", api.NewAPIHandler(uuid.Must(uuid.New()), "", metrics.DefaultRegistry, time.Now().Add(24 *time.Hour) , 0, 0, 0, 0))
+	mux.Handle("/", api.NewAPIHandler(uuid.Must(uuid.New()), "", nil, time.Now().Add(24 *time.Hour) , 0, 0, 0, 0))
 	if err := http.ListenAndServe("localhost:9200", mux); err != nil {
 		if err != http.ErrServerClosed {
 			panic(err)
