@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/elastic/mock-es/pkg/api"
@@ -73,9 +75,12 @@ func main() {
 				}
 
 				for _, sm := range rm.ScopeMetrics {
+					out := make(map[string]int64, len(sm.Metrics))
 					for _, m := range sm.Metrics {
-						log.Println(fmt.Sprintf("%s: %v", m.Name, m.Data.(metricdata.Sum[int64]).DataPoints[0].Value))
+						out[m.Name] = m.Data.(metricdata.Sum[int64]).DataPoints[0].Value
 					}
+					b, _ := json.Marshal(out)
+					fmt.Fprintf(os.Stdout, "%s\n", b)
 				}
 			}
 		}()
