@@ -85,10 +85,59 @@ import (
 
 func main() {
 	mux := http.NewServeMux()
-	mux.Handle("/", api.NewAPIHandler(uuid.Must(uuid.New()), "", nil, time.Now().Add(24 *time.Hour) , 0, 0, 0, 0))
+	mux.Handle("/", api.NewAPIHandler(uuid.Must(uuid.NewV4()), "", nil, time.Now().Add(24 *time.Hour) , 0, 0, 0, 0))
 	if err := http.ListenAndServe("localhost:9200", mux); err != nil {
 		if err != http.ErrServerClosed {
 			panic(err)
+		}
+	}
+}
+```
+
+## Reading metrics
+
+``` go
+import (
+	"net/http"
+	"time"
+
+	"github.com/elastic/mock-es/pkg/api"
+	"github.com/gofrs/uuid/v5"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+)
+
+func main() {
+	rdr := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(rdr))
+
+	mux := http.NewServeMux()
+	mux.Handle("/", api.NewAPIHandler(uuid.Must(uuid.NewV4()), "", provider, time.Now().Add(24 *time.Hour) , 0, 0, 0, 0))
+
+	go func() {
+		if err := http.ListenAndServe("localhost:9200", mux); err != nil {
+			if err != http.ErrServerClosed {
+				panic(err)
+			}
+		}
+	}()
+
+	// send requests
+	// ...
+
+	// read metrics
+	rm := metricdata.ResourceMetrics{}
+	if err := rdr.Collect(context.Background(), &rm); err != nil {
+		panic(err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch d := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				// check
+			}
 		}
 	}
 }
