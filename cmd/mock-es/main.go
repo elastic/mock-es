@@ -79,8 +79,10 @@ func main() {
 					for _, m := range sm.Metrics {
 						out[m.Name] = m.Data.(metricdata.Sum[int64]).DataPoints[0].Value
 					}
-					b, _ := json.Marshal(out)
-					fmt.Fprintf(os.Stdout, "%s\n", b)
+					if len(out) != 0 {
+						b, _ := json.Marshal(out)
+						fmt.Fprintf(os.Stdout, "%s\n", b)
+					}
 				}
 			}
 		}()
