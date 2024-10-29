@@ -75,9 +75,16 @@ func main() {
 				}
 
 				for _, sm := range rm.ScopeMetrics {
-					out := make(map[string]int64, len(sm.Metrics))
+					type Value struct {
+						Count int64
+					}
+					out := make(map[string]Value, len(sm.Metrics))
 					for _, m := range sm.Metrics {
-						out[m.Name] = m.Data.(metricdata.Sum[int64]).DataPoints[0].Value
+						for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+							out[m.Name] = Value{
+								Count: out[m.Name].Count + dp.Value,
+							}
+						}
 					}
 					if len(out) != 0 {
 						b, _ := json.Marshal(out)
