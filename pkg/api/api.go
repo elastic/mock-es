@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,21 +12,9 @@ import (
 	"time"
 
 	"github.com/mileusna/useragent"
-	"github.com/rcrowley/go-metrics"
-)
-
-var (
-	rootTotalMetrics           string = "root.total"
-	licenseTotalMetrics        string = "license.total"
-	bulkCreateTotalMetrics     string = "bulk.create.total"
-	bulkCreateDuplicateMetrics string = "bulk.create.duplicate"
-	bulkCreateTooManyMetrics   string = "bulk.create.too_many"
-	bulkCreateNonIndexMetrics  string = "bulk.create.non_index"
-	bulkCreateOkMetrics        string = "bulk.create.ok"
-	bulkCreateTooLargeMetrics  string = "bulk.create.too_large"
-	bulkIndexTotalMetrics      string = "bulk.index.total"
-	bulkUpdateTotalMetrics     string = "bulk.update.total"
-	bulkDeleteTotalMetrics     string = "bulk.delete.total"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // BulkResponse is an Elastic Search Bulk Response, assuming
@@ -37,24 +26,34 @@ type BulkResponse struct {
 
 // APIHandler struct.  Use NewAPIHandler to make sure it is filled in correctly for use.
 type APIHandler struct {
-	ActionOdds      [100]int
-	MethodOdds      [100]int
-	UUID            fmt.Stringer
-	ClusterUUID     string
-	Expire          time.Time
-	Delay           time.Duration
-	metricsRegistry metrics.Registry
+	ActionOdds  [100]int
+	MethodOdds  [100]int
+	UUID        fmt.Stringer
+	ClusterUUID string
+	Expire      time.Time
+	Delay       time.Duration
+	metrics     *metrics
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
-func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, metricsRegistry metrics.Registry, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
-	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay, metricsRegistry: metricsRegistry}
+func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.MeterProvider, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
+	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
 	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
 		panic(fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds)))
 	}
 	if int(percentTooLarge) > len(h.MethodOdds) {
 		panic(fmt.Errorf("percent TooLarge cannot be greater than %d", len(h.MethodOdds)))
 	}
+
+	if meterProvider == nil {
+		meterProvider = otel.GetMeterProvider()
+	}
+
+	metrics, err := newMetrics(meterProvider)
+	if err != nil {
+		panic(fmt.Errorf("failed to create metrics"))
+	}
+	h.metrics = metrics
 
 	// Fill in ActionOdds
 	n := 0
@@ -90,9 +89,6 @@ func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, metricsRegistry metric
 // ServeHTTP looks at the request and routes it to the correct handler function
 func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(h.Delay)
-	ua := useragent.Parse(r.Header.Get("User-Agent"))
-	incrementCounter("user_agent."+ua.String+".total", h.metricsRegistry)
-	incrementCounter("user_agent."+ua.String+"."+r.URL.Path, h.metricsRegistry)
 
 	// required for official clients to recognize this as a valid endpoint.
 	w.Header().Set("X-Elastic-Product", "Elasticsearch")
@@ -115,10 +111,11 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Bulk handles bulk posts
 func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
-	incrementCounter(bulkCreateTotalMetrics, h.metricsRegistry)
+	attrs := metric.WithAttributeSet(requestAttributes(r))
+	h.metrics.bulkCreateTotalMetrics.Add(context.Background(), 1, attrs)
 	methodStatus := h.MethodOdds[rand.Intn(len(h.MethodOdds))]
 	if methodStatus == http.StatusRequestEntityTooLarge {
-		incrementCounter(bulkCreateTooLargeMetrics, h.metricsRegistry)
+		h.metrics.bulkCreateTooLargeMetrics.Add(context.Background(), 1, attrs)
 		w.WriteHeader(methodStatus)
 		return
 	}
@@ -164,30 +161,30 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 		for k := range j {
 			switch k {
 			case "index":
-				incrementCounter(bulkIndexTotalMetrics, h.metricsRegistry)
+				h.metrics.bulkIndexTotalMetrics.Add(context.Background(), 1, attrs)
 				skipNextLine = true
 			case "create":
 				skipNextLine = true
 				actionStatus := h.ActionOdds[rand.Intn(len(h.ActionOdds))]
 				switch actionStatus {
 				case http.StatusOK:
-					incrementCounter(bulkCreateOkMetrics, h.metricsRegistry)
+					h.metrics.bulkCreateOkMetrics.Add(context.Background(), 1, attrs)
 				case http.StatusConflict:
 					br.Errors = true
-					incrementCounter(bulkCreateDuplicateMetrics, h.metricsRegistry)
+					h.metrics.bulkCreateDuplicateMetrics.Add(context.Background(), 1, attrs)
 				case http.StatusTooManyRequests:
 					br.Errors = true
-					incrementCounter(bulkCreateTooManyMetrics, h.metricsRegistry)
+					h.metrics.bulkCreateTooManyMetrics.Add(context.Background(), 1, attrs)
 				case http.StatusNotAcceptable:
 					br.Errors = true
-					incrementCounter(bulkCreateNonIndexMetrics, h.metricsRegistry)
+					h.metrics.bulkCreateNonIndexMetrics.Add(context.Background(), 1, attrs)
 				}
 				br.Items = append(br.Items, map[string]any{"created": map[string]any{"status": actionStatus}})
 			case "update":
-				incrementCounter(bulkUpdateTotalMetrics, h.metricsRegistry)
+				h.metrics.bulkUpdateTotalMetrics.Add(context.Background(), 1, attrs)
 				skipNextLine = true
 			case "delete":
-				incrementCounter(bulkDeleteTotalMetrics, h.metricsRegistry)
+				h.metrics.bulkDeleteTotalMetrics.Add(context.Background(), 1, attrs)
 				skipNextLine = false
 			}
 		}
@@ -204,7 +201,7 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 
 // Root handles / get requests
 func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
-	incrementCounter(rootTotalMetrics, h.metricsRegistry)
+	h.metrics.rootTotalMetrics.Add(context.Background(), 1, metric.WithAttributeSet(requestAttributes(r)))
 	ua := useragent.Parse(r.Header.Get("User-Agent"))
 	root := fmt.Sprintf("{\"name\" : \"mock\", \"cluster_uuid\" : \"%s\", \"version\" : { \"number\" : \"%s\", \"build_flavor\" : \"default\"}}", h.ClusterUUID, ua.VersionNoFull())
 	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
@@ -214,14 +211,16 @@ func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
 
 // License handles /_license get requests
 func (h *APIHandler) License(w http.ResponseWriter, r *http.Request) {
-	incrementCounter(licenseTotalMetrics, h.metricsRegistry)
+	h.metrics.licenseTotalMetrics.Add(context.Background(), 1, metric.WithAttributeSet(requestAttributes(r)))
 	license := fmt.Sprintf("{\"license\" : {\"status\" : \"active\", \"uid\" : \"%s\", \"type\" : \"trial\", \"expiry_date_in_millis\" : %d}}", h.UUID.String(), h.Expire.UnixMilli())
 	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
 	w.Write([]byte(license))
 	return
 }
 
-func incrementCounter(counterName string, registry metrics.Registry) {
-	m := metrics.GetOrRegisterCounter(counterName, registry)
-	m.Inc(1)
+func requestAttributes(r *http.Request) attribute.Set {
+	return attribute.NewSet(
+		attribute.String("user_agent", r.UserAgent()),
+		attribute.String("path", r.URL.Path),
+	)
 }
