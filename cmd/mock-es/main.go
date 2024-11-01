@@ -76,7 +76,7 @@ func main() {
 
 				for _, sm := range rm.ScopeMetrics {
 					type Value struct {
-						Count int64
+						Count int64 `json:"count,omitempty"`
 					}
 					out := make(map[string]Value, len(sm.Metrics))
 					for _, m := range sm.Metrics {
