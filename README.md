@@ -13,10 +13,8 @@ You are developing a feature that splits the batch when `StatusEntityTooLarge` i
 
 ## Building the CLI server
 
-```
-git clone https://github.com/elastic/mock-es.git
-cd mock-es/cmd/mock-es
-go build
+```bash
+go install github.com/elastic/mock-es/cmd/mock-es@latest
 ```
 
 ## Running the CLI server
@@ -24,7 +22,7 @@ go build
 To run the server with defaults (port 9200, no TLS, always succeed).  Simply run the executable:
 
 ```
-./mock-es
+mock-es
 ```
 
 Options are used to change the behavior.
