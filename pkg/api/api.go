@@ -24,6 +24,13 @@ type BulkResponse struct {
 	Items  []map[string]any `json:"items,omitempty"`
 }
 
+type dataStore struct {
+	// three dimensional map storing index, id and the document
+	data map[string]map[string]map[string]any
+}
+
+var doc dataStore = dataStore{data: make(map[string]map[string]map[string]any)}
+
 // APIHandler struct.  Use NewAPIHandler to make sure it is filled in correctly for use.
 type APIHandler struct {
 	ActionOdds  [100]int
@@ -103,6 +110,9 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/_license":
 		h.License(w, r)
 		return
+	case r.Method == http.MethodGet && r.URL.Path == "/data":
+		h.Data(w, r)
+		return
 	default:
 		w.Write([]byte("{\"tagline\": \"You Know, for Testing\"}"))
 		return
@@ -141,11 +151,12 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	// { "update": {"_id": "5", "_index": "index1"} }
 	// { "doc": {"my_field": "baz"} }
 
-	var skipNextLine bool
+	var indexName string
+	var id string
+
 	for scanner.Scan() {
 		b := scanner.Bytes()
-		if skipNextLine || len(b) == 0 {
-			skipNextLine = false
+		if len(b) == 0 {
 			continue
 		}
 		var j map[string]any
@@ -158,13 +169,26 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 			log.Printf("error, number of keys off: %d should be 1", len(j))
 			continue
 		}
-		for k := range j {
+
+		for k, v := range j {
+			if m, ok := v.(map[string]any); ok {
+				indexName = m["_index"].(string)
+				id = m["_id"].(string)
+			}
 			switch k {
 			case "index":
 				h.metrics.bulkIndexTotalMetrics.Add(context.Background(), 1, attrs)
-				skipNextLine = true
+				d, err := getDocument(scanner)
+				if err != nil {
+					return
+				}
+				if doc.data[indexName] == nil {
+					doc.data[indexName] = make(map[string]map[string]any)
+				}
+				doc.data[indexName][id] = d
+				br.Items = append(br.Items, map[string]any{k: v, "result": "created", "status": 201})
+
 			case "create":
-				skipNextLine = true
 				actionStatus := h.ActionOdds[rand.Intn(len(h.ActionOdds))]
 				switch actionStatus {
 				case http.StatusOK:
@@ -179,24 +203,60 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 					br.Errors = true
 					h.metrics.bulkCreateNonIndexMetrics.Add(context.Background(), 1, attrs)
 				}
-				br.Items = append(br.Items, map[string]any{"created": map[string]any{"status": actionStatus}})
+				d, err := getDocument(scanner)
+				if err != nil {
+					return
+				}
+				if doc.data[indexName] == nil {
+					doc.data[indexName] = make(map[string]map[string]any)
+				}
+				doc.data[indexName][id] = d
+				br.Items = append(br.Items, map[string]any{k: v, "result": "created", "status": actionStatus})
+
 			case "update":
 				h.metrics.bulkUpdateTotalMetrics.Add(context.Background(), 1, attrs)
-				skipNextLine = true
+				l, err := getDocument(scanner)
+				if err != nil {
+					return
+				}
+				// update the document
+				for key, updatedValue := range l["doc"].(map[string]any) {
+					if _, exists := doc.data[indexName][id][key]; exists {
+						doc.data[indexName][id][key] = updatedValue
+						br.Items = append(br.Items, map[string]any{k: v, "result": "updated", "status": 200})
+					} else {
+						br.Errors = true
+						br.Items = append(br.Items, map[string]any{k: v, "result": "not_found", "status": 404})
+
+					}
+				}
 			case "delete":
 				h.metrics.bulkDeleteTotalMetrics.Add(context.Background(), 1, attrs)
-				skipNextLine = false
+				delete(doc.data[indexName], id)
 			}
 		}
+
 	}
 	brBytes, err := json.Marshal(br)
 	if err != nil {
 		log.Printf("error marshal bulk reply: %s", err)
 		return
 	}
-	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.Write(brBytes)
-	return
+}
+
+func getDocument(s *bufio.Scanner) (map[string]any, error) {
+	s.Scan()
+	b := s.Bytes()
+	var l map[string]any
+	err := json.Unmarshal(b, &l)
+	if err != nil {
+		log.Printf("error unmarshal: %s", err)
+		return nil, err
+	}
+
+	return l, nil
 }
 
 // Root handles / get requests
@@ -206,16 +266,25 @@ func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
 	root := fmt.Sprintf("{\"name\" : \"mock\", \"cluster_uuid\" : \"%s\", \"version\" : { \"number\" : \"%s\", \"build_flavor\" : \"default\"}}", h.ClusterUUID, ua.VersionNoFull())
 	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
 	w.Write([]byte(root))
-	return
 }
 
 // License handles /_license get requests
 func (h *APIHandler) License(w http.ResponseWriter, r *http.Request) {
 	h.metrics.licenseTotalMetrics.Add(context.Background(), 1, metric.WithAttributeSet(requestAttributes(r)))
 	license := fmt.Sprintf("{\"license\" : {\"status\" : \"active\", \"uid\" : \"%s\", \"type\" : \"trial\", \"expiry_date_in_millis\" : %d}}", h.UUID.String(), h.Expire.UnixMilli())
-	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(license))
-	return
+}
+
+// Data handles /data get requests
+func (h *APIHandler) Data(w http.ResponseWriter, r *http.Request) {
+	brBytes, err := json.Marshal(doc.data)
+	if err != nil {
+		log.Printf("error marshal bulk reply: %s", err)
+		return
+	}
+	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.Write(brBytes)
 }
 
 func requestAttributes(r *http.Request) attribute.Set {
