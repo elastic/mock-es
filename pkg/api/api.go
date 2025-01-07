@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/mileusna/useragent"
@@ -33,6 +34,15 @@ type APIHandler struct {
 	Expire      time.Time
 	Delay       time.Duration
 	metrics     *metrics
+	history     []RequestRecord
+	historyMu   sync.Mutex
+}
+
+// RequestRecord is a record of a request
+type RequestRecord struct {
+	Method string `json:"method"`
+	URI    string `json:"uri"`
+	Body   string `json:"body"`
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
@@ -103,6 +113,9 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/_license":
 		h.License(w, r)
 		return
+	case r.Method == http.MethodGet && r.URL.Path == "/_history":
+		h.History(w, r)
+		return
 	default:
 		w.Write([]byte("{\"tagline\": \"You Know, for Testing\"}"))
 		return
@@ -142,8 +155,10 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	// { "doc": {"my_field": "baz"} }
 
 	var skipNextLine bool
+	var body []byte
 	for scanner.Scan() {
 		b := scanner.Bytes()
+		body = append(body, b...)
 		if skipNextLine || len(b) == 0 {
 			skipNextLine = false
 			continue
@@ -189,6 +204,7 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	h.recordRequest(r, body)
 	brBytes, err := json.Marshal(br)
 	if err != nil {
 		log.Printf("error marshal bulk reply: %s", err)
@@ -201,6 +217,7 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 
 // Root handles / get requests
 func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
+	h.recordRequest(r, nil)
 	h.metrics.rootTotalMetrics.Add(context.Background(), 1, metric.WithAttributeSet(requestAttributes(r)))
 	ua := useragent.Parse(r.Header.Get("User-Agent"))
 	root := fmt.Sprintf("{\"name\" : \"mock\", \"cluster_uuid\" : \"%s\", \"version\" : { \"number\" : \"%s\", \"build_flavor\" : \"default\"}}", h.ClusterUUID, ua.VersionNoFull())
@@ -211,11 +228,30 @@ func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
 
 // License handles /_license get requests
 func (h *APIHandler) License(w http.ResponseWriter, r *http.Request) {
+	h.recordRequest(r, nil)
 	h.metrics.licenseTotalMetrics.Add(context.Background(), 1, metric.WithAttributeSet(requestAttributes(r)))
 	license := fmt.Sprintf("{\"license\" : {\"status\" : \"active\", \"uid\" : \"%s\", \"type\" : \"trial\", \"expiry_date_in_millis\" : %d}}", h.UUID.String(), h.Expire.UnixMilli())
 	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
 	w.Write([]byte(license))
 	return
+}
+
+// History handles /_history get requests
+func (h *APIHandler) History(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	h.historyMu.Lock()
+	h.historyMu.Unlock()
+	json.NewEncoder(w).Encode(h.history)
+	return
+}
+
+func (h *APIHandler) recordRequest(r *http.Request, body []byte) {
+	log.Printf("%s %s\n%s", r.Method, r.URL.RequestURI(), body)
+	h.historyMu.Lock()
+	defer h.historyMu.Unlock()
+	h.history = append(h.history, RequestRecord{Method: r.Method, URI: r.URL.RequestURI(), Body: string(body)})
 }
 
 func requestAttributes(r *http.Request) attribute.Set {
