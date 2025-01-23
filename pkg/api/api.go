@@ -27,15 +27,16 @@ type BulkResponse struct {
 
 // APIHandler struct.  Use NewAPIHandler to make sure it is filled in correctly for use.
 type APIHandler struct {
-	ActionOdds  [100]int
-	MethodOdds  [100]int
-	UUID        fmt.Stringer
-	ClusterUUID string
-	Expire      time.Time
-	Delay       time.Duration
-	metrics     *metrics
-	history     []RequestRecord
-	historyMu   sync.Mutex
+	ActionOdds   [100]int
+	MethodOdds   [100]int
+	UUID         fmt.Stringer
+	ClusterUUID  string
+	Expire       time.Time
+	Delay        time.Duration
+	metrics      *metrics
+	history      []*RequestRecord
+	historyIndex int
+	historyMu    sync.Mutex
 }
 
 // RequestRecord is a record of a request
@@ -46,7 +47,7 @@ type RequestRecord struct {
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
-func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.MeterProvider, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
+func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.MeterProvider, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap uint) *APIHandler {
 	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
 	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
 		panic(fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds)))
@@ -93,6 +94,7 @@ func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.M
 		h.MethodOdds[n] = http.StatusOK
 	}
 
+	h.history = make([]*RequestRecord, historyCap)
 	return h
 }
 
@@ -248,10 +250,13 @@ func (h *APIHandler) History(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandler) recordRequest(r *http.Request, body []byte) {
-	log.Printf("%s %s\n%s", r.Method, r.URL.RequestURI(), body)
+	if cap(h.history) == 0 {
+		return
+	}
 	h.historyMu.Lock()
 	defer h.historyMu.Unlock()
-	h.history = append(h.history, RequestRecord{Method: r.Method, URI: r.URL.RequestURI(), Body: string(body)})
+	h.history[h.historyIndex] = &RequestRecord{Method: r.Method, URI: r.URL.RequestURI(), Body: string(body)}
+	h.historyIndex = (h.historyIndex + 1) % cap(h.history)
 }
 
 func requestAttributes(r *http.Request) attribute.Set {

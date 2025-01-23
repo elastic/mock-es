@@ -24,6 +24,7 @@ var (
 	percentTooMany   uint
 	percentNonIndex  uint
 	percentTooLarge  uint
+	historyCap       uint
 	uid              uuid.UUID
 	clusterUUID      string
 	metricsInterval  time.Duration
@@ -38,6 +39,7 @@ func init() {
 	flag.UintVar(&percentTooMany, "toomany", 0, "percent chance StatusTooManyRequests is returned for create action")
 	flag.UintVar(&percentNonIndex, "nonindex", 0, "percent chance StatusNotAcceptable is returned for create action")
 	flag.UintVar(&percentTooLarge, "toolarge", 0, "percent chance StatusEntityTooLarge is returned for POST method on _bulk endpoint")
+	flag.UintVar(&historyCap, "history", 0, "number of request bodies to keep, available on _history endpoint")
 	flag.StringVar(&clusterUUID, "clusteruuid", "", "Cluster UUID of Elasticsearch we are mocking")
 	flag.DurationVar(&metricsInterval, "metrics", 0, "Go 'time.Duration' to wait between printing metrics to stdout, 0 is no metrics")
 	flag.StringVar(&certFile, "certfile", "", "path to PEM certificate file, empty sting is no TLS")
@@ -95,7 +97,7 @@ func main() {
 		}()
 	}
 
-	mux.Handle("/", api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge))
+	mux.Handle("/", api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap))
 
 	switch {
 	case certFile != "" && keyFile != "":
