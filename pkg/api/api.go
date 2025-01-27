@@ -244,8 +244,16 @@ func (h *APIHandler) History(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	h.historyMu.Lock()
-	h.historyMu.Unlock()
-	json.NewEncoder(w).Encode(h.history)
+	defer h.historyMu.Unlock()
+
+	nonNilHist := make([]RequestRecord, 0)
+	for _, v := range h.history {
+		if v != nil {
+			nonNilHist = append(nonNilHist, *v)
+		}
+	}
+
+	json.NewEncoder(w).Encode(nonNilHist)
 	return
 }
 
