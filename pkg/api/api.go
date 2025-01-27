@@ -249,6 +249,13 @@ func (h *APIHandler) History(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+// RequestHistory returns a list of all requests made to the handler
+func (h *APIHandler) RequestHistory() []*RequestRecord {
+	h.historyMu.Lock()
+	defer h.historyMu.Unlock()
+	return h.history
+}
+
 func (h *APIHandler) recordRequest(r *http.Request, body []byte) {
 	if cap(h.history) == 0 {
 		return
