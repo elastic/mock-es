@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -97,7 +99,8 @@ func main() {
 		}()
 	}
 
-	mux.Handle("/", api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap))
+	apiHandler := api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap)
+	mux.Handle("/", loggingMiddleware(apiHandler))
 
 	switch {
 	case certFile != "" && keyFile != "":
@@ -113,4 +116,21 @@ func main() {
 			}
 		}
 	}
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("error reading request body: %s", err)
+			http.Error(w, "error reading request body", http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("%s %s\n%s", r.Method, r.URL.RequestURI(), body)
+
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+		next.ServeHTTP(w, r)
+	})
 }
