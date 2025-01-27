@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/mileusna/useragent"
@@ -26,17 +27,27 @@ type BulkResponse struct {
 
 // APIHandler struct.  Use NewAPIHandler to make sure it is filled in correctly for use.
 type APIHandler struct {
-	ActionOdds  [100]int
-	MethodOdds  [100]int
-	UUID        fmt.Stringer
-	ClusterUUID string
-	Expire      time.Time
-	Delay       time.Duration
-	metrics     *metrics
+	ActionOdds   [100]int
+	MethodOdds   [100]int
+	UUID         fmt.Stringer
+	ClusterUUID  string
+	Expire       time.Time
+	Delay        time.Duration
+	metrics      *metrics
+	history      []*RequestRecord
+	historyIndex int
+	historyMu    sync.Mutex
+}
+
+// RequestRecord is a record of a request
+type RequestRecord struct {
+	Method string `json:"method"`
+	URI    string `json:"uri"`
+	Body   string `json:"body"`
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
-func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.MeterProvider, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge uint) *APIHandler {
+func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.MeterProvider, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap uint) *APIHandler {
 	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
 	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
 		panic(fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds)))
@@ -83,6 +94,7 @@ func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.M
 		h.MethodOdds[n] = http.StatusOK
 	}
 
+	h.history = make([]*RequestRecord, historyCap)
 	return h
 }
 
@@ -102,6 +114,9 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.Method == http.MethodGet && r.URL.Path == "/_license":
 		h.License(w, r)
+		return
+	case r.Method == http.MethodGet && r.URL.Path == "/_history":
+		h.History(w, r)
 		return
 	default:
 		w.Write([]byte("{\"tagline\": \"You Know, for Testing\"}"))
@@ -142,8 +157,10 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	// { "doc": {"my_field": "baz"} }
 
 	var skipNextLine bool
+	var body []byte
 	for scanner.Scan() {
 		b := scanner.Bytes()
+		body = append(body, b...)
 		if skipNextLine || len(b) == 0 {
 			skipNextLine = false
 			continue
@@ -189,6 +206,7 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	h.recordRequest(r, body)
 	brBytes, err := json.Marshal(br)
 	if err != nil {
 		log.Printf("error marshal bulk reply: %s", err)
@@ -201,6 +219,7 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 
 // Root handles / get requests
 func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
+	h.recordRequest(r, nil)
 	h.metrics.rootTotalMetrics.Add(context.Background(), 1, metric.WithAttributeSet(requestAttributes(r)))
 	ua := useragent.Parse(r.Header.Get("User-Agent"))
 	root := fmt.Sprintf("{\"name\" : \"mock\", \"cluster_uuid\" : \"%s\", \"version\" : { \"number\" : \"%s\", \"build_flavor\" : \"default\"}}", h.ClusterUUID, ua.VersionNoFull())
@@ -211,11 +230,48 @@ func (h *APIHandler) Root(w http.ResponseWriter, r *http.Request) {
 
 // License handles /_license get requests
 func (h *APIHandler) License(w http.ResponseWriter, r *http.Request) {
+	h.recordRequest(r, nil)
 	h.metrics.licenseTotalMetrics.Add(context.Background(), 1, metric.WithAttributeSet(requestAttributes(r)))
 	license := fmt.Sprintf("{\"license\" : {\"status\" : \"active\", \"uid\" : \"%s\", \"type\" : \"trial\", \"expiry_date_in_millis\" : %d}}", h.UUID.String(), h.Expire.UnixMilli())
 	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
 	w.Write([]byte(license))
 	return
+}
+
+// History handles /_history get requests
+func (h *APIHandler) History(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	h.historyMu.Lock()
+	defer h.historyMu.Unlock()
+
+	nonNilHist := make([]RequestRecord, 0)
+	for _, v := range h.history {
+		if v != nil {
+			nonNilHist = append(nonNilHist, *v)
+		}
+	}
+
+	json.NewEncoder(w).Encode(nonNilHist)
+	return
+}
+
+// RequestHistory returns a list of all requests made to the handler
+func (h *APIHandler) RequestHistory() []*RequestRecord {
+	h.historyMu.Lock()
+	defer h.historyMu.Unlock()
+	return h.history
+}
+
+func (h *APIHandler) recordRequest(r *http.Request, body []byte) {
+	if cap(h.history) == 0 {
+		return
+	}
+	h.historyMu.Lock()
+	defer h.historyMu.Unlock()
+	h.history[h.historyIndex] = &RequestRecord{Method: r.Method, URI: r.URL.RequestURI(), Body: string(body)}
+	h.historyIndex = (h.historyIndex + 1) % cap(h.history)
 }
 
 func requestAttributes(r *http.Request) attribute.Set {
