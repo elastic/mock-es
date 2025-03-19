@@ -127,7 +127,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		log.Printf("%s %s\n%s", r.Method, r.URL.RequestURI(), body)
+		log.Printf("%s %s\n", r.Method, r.URL.RequestURI())
 
 		r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewBuffer(body))
