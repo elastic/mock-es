@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/elastic/mock-es/pkg/api"
@@ -33,6 +35,7 @@ var (
 	certFile         string
 	keyFile          string
 	delay            time.Duration
+	verbose          bool
 )
 
 func init() {
@@ -47,6 +50,7 @@ func init() {
 	flag.StringVar(&certFile, "certfile", "", "path to PEM certificate file, empty sting is no TLS")
 	flag.StringVar(&keyFile, "keyfile", "", "path to PEM private key file, empty sting is no TLS")
 	flag.DurationVar(&delay, "delay", 0, "Go 'time.Duration' to wait before processing API request, 0 is no delay")
+	flag.BoolVar(&verbose, "verbose", false, "Enable verbosity, show non error messages")
 
 	uid = uuid.Must(uuid.NewV4())
 	expire = time.Now().Add(24 * time.Hour)
@@ -99,17 +103,26 @@ func main() {
 		}()
 	}
 
-	apiHandler := api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap)
-	mux.Handle("/", loggingMiddleware(apiHandler))
+	apiHandler := http.Handler(api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap))
+	if verbose {
+		apiHandler = loggingMiddleware(apiHandler)
+	}
+	mux.Handle("/", apiHandler)
 
 	switch {
 	case certFile != "" && keyFile != "":
+		if verbose {
+			log.Printf("Starting HTTPS server on %s", addr)
+		}
 		if err := http.ListenAndServeTLS(addr, certFile, keyFile, mux); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("error running HTTPs server: %s", err)
 			}
 		}
 	default:
+		if verbose {
+			log.Printf("Starting HTTP server on %s", addr)
+		}
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("error running HTTP server: %s", err)
@@ -120,17 +133,33 @@ func main() {
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
+		rawBody, err := io.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("error reading request body: %s", err)
 			http.Error(w, "error reading request body", http.StatusInternalServerError)
 			return
 		}
 
+		var body string
+		if strings.EqualFold(r.Header.Get("content-encoding"), "gzip") {
+			bodyReader, err := gzip.NewReader(bytes.NewReader(rawBody))
+			if err != nil {
+				log.Printf("cannot read gziped request body: %s", err)
+				body = "<error reading request body>"
+			}
+			defer bodyReader.Close()
+			bodyBytes, err := io.ReadAll(bodyReader)
+			if err != nil {
+				log.Printf("cannot read gziped body: %s", err)
+				body = "<error reading gziped body>"
+			}
+			body = string(bodyBytes)
+		}
+
 		log.Printf("%s %s\n%s", r.Method, r.URL.RequestURI(), body)
 
 		r.Body.Close()
-		r.Body = io.NopCloser(bytes.NewBuffer(body))
+		r.Body = io.NopCloser(bytes.NewBuffer(rawBody))
 		next.ServeHTTP(w, r)
 	})
 }
