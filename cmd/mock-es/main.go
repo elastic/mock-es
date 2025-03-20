@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/elastic/mock-es/pkg/api"
@@ -120,17 +122,33 @@ func main() {
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
+		rawBody, err := io.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("error reading request body: %s", err)
 			http.Error(w, "error reading request body", http.StatusInternalServerError)
 			return
 		}
 
-		log.Printf("%s %s\n", r.Method, r.URL.RequestURI())
+		var body string
+		if strings.EqualFold(r.Header.Get("content-encoding"), "gzip") {
+			bodyReader, err := gzip.NewReader(bytes.NewReader(rawBody))
+			if err != nil {
+				log.Printf("cannot read gziped request body: %s", err)
+				body = "<error reading request body>"
+			}
+			defer bodyReader.Close()
+			bodyBytes, err := io.ReadAll(bodyReader)
+			if err != nil {
+				log.Printf("cannot read gziped body: %s", err)
+				body = "<error reading gziped body>"
+			}
+			body = string(bodyBytes)
+		}
+
+		log.Printf("%s %s\n%s", r.Method, r.URL.RequestURI(), body)
 
 		r.Body.Close()
-		r.Body = io.NopCloser(bytes.NewBuffer(body))
+		r.Body = io.NopCloser(bytes.NewBuffer(rawBody))
 		next.ServeHTTP(w, r)
 	})
 }
