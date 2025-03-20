@@ -35,6 +35,7 @@ var (
 	certFile         string
 	keyFile          string
 	delay            time.Duration
+	logRequests      bool
 )
 
 func init() {
@@ -49,6 +50,7 @@ func init() {
 	flag.StringVar(&certFile, "certfile", "", "path to PEM certificate file, empty sting is no TLS")
 	flag.StringVar(&keyFile, "keyfile", "", "path to PEM private key file, empty sting is no TLS")
 	flag.DurationVar(&delay, "delay", 0, "Go 'time.Duration' to wait before processing API request, 0 is no delay")
+	flag.BoolVar(&logRequests, "logrequests", false, "Enable request logging")
 
 	uid = uuid.Must(uuid.NewV4())
 	expire = time.Now().Add(24 * time.Hour)
@@ -101,17 +103,22 @@ func main() {
 		}()
 	}
 
-	apiHandler := api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap)
-	mux.Handle("/", loggingMiddleware(apiHandler))
+	apiHandler := http.Handler(api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap))
+	if logRequests {
+		apiHandler = loggingMiddleware(apiHandler)
+	}
+	mux.Handle("/", apiHandler)
 
 	switch {
 	case certFile != "" && keyFile != "":
+		log.Printf("Starting HTTPS server on %s", addr)
 		if err := http.ListenAndServeTLS(addr, certFile, keyFile, mux); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("error running HTTPs server: %s", err)
 			}
 		}
 	default:
+		log.Printf("Starting HTTP server on %s", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("error running HTTP server: %s", err)
