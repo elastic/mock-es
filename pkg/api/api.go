@@ -37,6 +37,7 @@ type APIHandler struct {
 	history      []*RequestRecord
 	historyIndex int
 	historyMu    sync.Mutex
+	configMu     sync.RWMutex
 }
 
 // RequestRecord is a record of a request
@@ -47,15 +48,20 @@ type RequestRecord struct {
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
-func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.MeterProvider, expire time.Time, delay time.Duration, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap uint) *APIHandler {
-	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
-	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
-		panic(fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds)))
-	}
-	if int(percentTooLarge) > len(h.MethodOdds) {
-		panic(fmt.Errorf("percent TooLarge cannot be greater than %d", len(h.MethodOdds)))
-	}
+func NewAPIHandler(
+	uuid fmt.Stringer,
+	clusterUUID string,
+	meterProvider metric.MeterProvider,
+	expire time.Time,
+	delay time.Duration,
+	percentDuplicate,
+	percentTooMany,
+	percentNonIndex,
+	percentTooLarge,
+	historyCap uint,
+) *APIHandler {
 
+	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
 	if meterProvider == nil {
 		meterProvider = otel.GetMeterProvider()
 	}
@@ -65,6 +71,32 @@ func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.M
 		panic(fmt.Errorf("failed to create metrics"))
 	}
 	h.metrics = metrics
+
+	h.history = make([]*RequestRecord, historyCap)
+
+	err = h.UpdateOdds(percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge)
+	if err != nil {
+		panic(err)
+	}
+
+	return h
+}
+
+func (h *APIHandler) UpdateOdds(
+	percentDuplicate,
+	percentTooMany,
+	percentNonIndex,
+	percentTooLarge uint,
+) error {
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+
+	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
+		return fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds))
+	}
+	if int(percentTooLarge) > len(h.MethodOdds) {
+		return fmt.Errorf("percent TooLarge cannot be greater than %d", len(h.MethodOdds))
+	}
 
 	// Fill in ActionOdds
 	n := 0
@@ -94,8 +126,7 @@ func NewAPIHandler(uuid fmt.Stringer, clusterUUID string, meterProvider metric.M
 		h.MethodOdds[n] = http.StatusOK
 	}
 
-	h.history = make([]*RequestRecord, historyCap)
-	return h
+	return nil
 }
 
 // ServeHTTP looks at the request and routes it to the correct handler function
@@ -126,6 +157,9 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Bulk handles bulk posts
 func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
+	h.configMu.RLock()
+	defer h.configMu.RUnlock()
+
 	attrs := metric.WithAttributeSet(requestAttributes(r))
 	h.metrics.bulkCreateTotalMetrics.Add(context.Background(), 1, attrs)
 	methodStatus := h.MethodOdds[rand.Intn(len(h.MethodOdds))]
