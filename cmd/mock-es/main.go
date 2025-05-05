@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,11 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elastic/mock-es/pkg/api"
 	"github.com/gofrs/uuid/v5"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/elastic/mock-es/pkg/api"
 )
 
 var (
@@ -115,7 +117,7 @@ func main() {
 			log.Printf("Starting HTTPS server on %s", addr)
 		}
 		if err := http.ListenAndServeTLS(addr, certFile, keyFile, mux); err != nil {
-			if err != http.ErrServerClosed {
+			if !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("error running HTTPs server: %s", err)
 			}
 		}
@@ -124,7 +126,7 @@ func main() {
 			log.Printf("Starting HTTP server on %s", addr)
 		}
 		if err := http.ListenAndServe(addr, mux); err != nil {
-			if err != http.ErrServerClosed {
+			if !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("error running HTTP server: %s", err)
 			}
 		}
