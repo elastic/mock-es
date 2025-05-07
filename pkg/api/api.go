@@ -243,7 +243,10 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 
 		action, err := h.parseAction(b)
 		if err != nil {
-			log.Printf("failed to parse action response: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(
+				fmt.Sprintf(`{"error": "failed to parse action: %v"}`, err)))
+			log.Printf("failed to parse action: %v", err)
 			return
 		}
 
@@ -274,6 +277,9 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	h.recordRequest(r, body)
 	brBytes, err := json.Marshal(br)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(
+			fmt.Sprintf(`{"error": "error marshal bulk reply: %v"}`, err)))
 		log.Printf("error marshal bulk reply: %s", err)
 		return
 	}
