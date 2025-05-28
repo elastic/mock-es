@@ -262,11 +262,13 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 
 		var actionStatus int
 		var item map[string]any
-		if h.deterministicHandler == nil && action.Action == "create" {
-			actionStatus = h.ActionOdds[rand.Intn(len(h.ActionOdds))]
-			item = map[string]any{action.Action: map[string]any{"status": actionStatus}}
-		} else {
+		if h.deterministicHandler != nil {
 			actionStatus = h.deterministicHandler(action, b)
+			item = map[string]any{action.Action: map[string]any{"status": actionStatus}}
+		} else if action.Action == "create" {
+			// this is the probabilistic handler, it does nothing for all the
+			// other actions, only create is handled according to the odds.
+			actionStatus = h.ActionOdds[rand.Intn(len(h.ActionOdds))]
 			item = map[string]any{action.Action: map[string]any{"status": actionStatus}}
 		}
 
