@@ -42,6 +42,7 @@ type APIHandler struct {
 	deterministicHandler func(action Action, event []byte) int
 }
 
+// Action is the action for /_bulk requests.
 type Action struct {
 	Action string
 	Meta   json.RawMessage
@@ -81,6 +82,8 @@ func NewAPIHandler(
 	return h
 }
 
+// NewDeterministicAPIHandler returns a handler wich will use handler to process
+// each action in the bulk request.
 func NewDeterministicAPIHandler(
 	uuid fmt.Stringer,
 	clusterUUID string,
@@ -259,9 +262,9 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 
 		var actionStatus int
 		var item map[string]any
-		if h.deterministicHandler == nil {
+		if h.deterministicHandler == nil && action.Action == "create" {
 			actionStatus = h.ActionOdds[rand.Intn(len(h.ActionOdds))]
-			item = map[string]any{"created": map[string]any{"status": actionStatus}}
+			item = map[string]any{action.Action: map[string]any{"status": actionStatus}}
 		} else {
 			actionStatus = h.deterministicHandler(action, b)
 			item = map[string]any{action.Action: map[string]any{"status": actionStatus}}
@@ -283,8 +286,9 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 		log.Printf("error marshal bulk reply: %s", err)
 		return
 	}
-	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(brBytes)
+
 	return
 }
 
@@ -296,7 +300,8 @@ func (h *APIHandler) parseAction(b []byte) (Action, error) {
 
 	}
 	if len(j) != 1 {
-		return Action{}, fmt.Errorf("error, number of keys off: %d should be 1", len(j))
+		return Action{}, fmt.Errorf(
+			"error, unexpected number of keys: got %d, it should be 1", len(j))
 	}
 
 	for action, data := range j {
@@ -306,7 +311,7 @@ func (h *APIHandler) parseAction(b []byte) (Action, error) {
 		}, nil
 	}
 
-	panic("unreachable")
+	return Action{}, fmt.Errorf("unexpected error: no action found")
 }
 
 func (h *APIHandler) updateMetrics(action string, actionStatus int, attrs metric.MeasurementOption) bool {
