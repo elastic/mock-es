@@ -82,7 +82,7 @@ func NewAPIHandler(
 	return h
 }
 
-// NewDeterministicAPIHandler returns a handler wich will use handler to process
+// NewDeterministicAPIHandler returns a handler wich which use handler to process
 // each action in the bulk request.
 func NewDeterministicAPIHandler(
 	uuid fmt.Stringer,
