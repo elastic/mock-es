@@ -25,6 +25,19 @@ type BulkResponse struct {
 	Items  []map[string]any `json:"items,omitempty"`
 }
 
+// Action is the action for /_bulk requests.
+type Action struct {
+	Action string
+	Meta   json.RawMessage
+}
+
+// RequestRecord is a record of a request
+type RequestRecord struct {
+	Method string `json:"method"`
+	URI    string `json:"uri"`
+	Body   string `json:"body"`
+}
+
 // APIHandler struct.  Use NewAPIHandler to make sure it is filled in correctly for use.
 type APIHandler struct {
 	ActionOdds   [100]int
@@ -40,19 +53,6 @@ type APIHandler struct {
 	configMu     sync.RWMutex
 
 	deterministicHandler func(action Action, event []byte) int
-}
-
-// Action is the action for /_bulk requests.
-type Action struct {
-	Action string
-	Meta   json.RawMessage
-}
-
-// RequestRecord is a record of a request
-type RequestRecord struct {
-	Method string `json:"method"`
-	URI    string `json:"uri"`
-	Body   string `json:"body"`
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
