@@ -92,6 +92,67 @@ func main() {
 }
 ```
 
+## Using the Deterministic Handler in a Unit Test
+
+For more predictable behavior in unit tests, especially when you need to control
+the exact responses for specific actions, you can use the 
+`NewDeterministicAPIHandler`. This handler takes a function that you define, 
+which will be called for each action in a bulk request. Your function receives 
+the action details and the event payload, and it should return the desired HTTP
+status code for that action.
+
+Here's a minimal example:
+
+```go
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/elastic/mock-es/pkg/api"
+	"github.com/gofrs/uuid/v5"
+)
+
+func main() {
+	deterministicHandler := func(action api.Action, event []byte) int {
+		// Example: Always return 200 OK for 'create' actions
+		if action.Action == "create" {
+			return http.StatusOK
+		}
+		// Example: Return 409 Conflict for 'index' actions with a specific ID
+		if action.Action == "index" {
+			var meta struct {
+				ID string `json:"_id"`
+			}
+			if err := json.Unmarshal(action.Meta, &meta); err == nil {
+				if meta.ID == "specific-id-to-fail" {
+					return http.StatusConflict
+				}
+			}
+		}
+		// Default for other actions or unhandled cases
+		return http.StatusOK
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", api.NewDeterministicAPIHandler(
+		uuid.Must(uuid.NewV4()),
+		"",
+		nil,
+		time.Now().Add(24*time.Hour),
+		0,
+		0,
+		deterministicHandler,
+	))
+
+	if err := http.ListenAndServe("localhost:9200", mux); err != nil {
+		if err != http.ErrServerClosed {
+			panic(err)
+		}
+	}
+}
+```
+
 ## Reading metrics
 
 ``` go
@@ -140,4 +201,3 @@ func main() {
 	}
 }
 ```
-
