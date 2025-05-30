@@ -25,6 +25,19 @@ type BulkResponse struct {
 	Items  []map[string]any `json:"items,omitempty"`
 }
 
+// Action is the action for /_bulk requests.
+type Action struct {
+	Action string
+	Meta   json.RawMessage
+}
+
+// RequestRecord is a record of a request
+type RequestRecord struct {
+	Method string `json:"method"`
+	URI    string `json:"uri"`
+	Body   string `json:"body"`
+}
+
 // APIHandler struct.  Use NewAPIHandler to make sure it is filled in correctly for use.
 type APIHandler struct {
 	ActionOdds   [100]int
@@ -38,13 +51,8 @@ type APIHandler struct {
 	historyIndex int
 	historyMu    sync.Mutex
 	configMu     sync.RWMutex
-}
 
-// RequestRecord is a record of a request
-type RequestRecord struct {
-	Method string `json:"method"`
-	URI    string `json:"uri"`
-	Body   string `json:"body"`
+	deterministicHandler func(action Action, event []byte) int
 }
 
 // NewAPIHandler return handler with Action and Method Odds array filled in
@@ -61,7 +69,51 @@ func NewAPIHandler(
 	historyCap uint,
 ) *APIHandler {
 
-	h := &APIHandler{UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
+	h, err := newAPIHandler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
+	if err != nil {
+		panic(fmt.Errorf("failed to create APIHandler: %w", err))
+	}
+
+	err = h.UpdateOdds(percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge)
+	if err != nil {
+		panic(fmt.Errorf("failed to UpdateOdds: %w", err))
+	}
+
+	return h
+}
+
+// NewDeterministicAPIHandler returns a handler which uses handler to process
+// each action in the bulk request.
+func NewDeterministicAPIHandler(
+	uuid fmt.Stringer,
+	clusterUUID string,
+	meterProvider metric.MeterProvider,
+	expire time.Time,
+	delay time.Duration,
+	historyCap uint,
+	handler func(action Action, event []byte) int,
+) *APIHandler {
+
+	h, err := newAPIHandler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
+	if err != nil {
+		panic(fmt.Errorf("failed to create APIHandler: %w", err))
+	}
+
+	h.deterministicHandler = handler
+
+	return h
+}
+
+func newAPIHandler(
+	uuid fmt.Stringer,
+	clusterUUID string,
+	meterProvider metric.MeterProvider,
+	expire time.Time,
+	delay time.Duration,
+	historyCap uint) (*APIHandler, error) {
+
+	h := &APIHandler{
+		UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
 	if meterProvider == nil {
 		meterProvider = otel.GetMeterProvider()
 	}
@@ -73,13 +125,7 @@ func NewAPIHandler(
 	h.metrics = metrics
 
 	h.history = make([]*RequestRecord, historyCap)
-
-	err = h.UpdateOdds(percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge)
-	if err != nil {
-		panic(err)
-	}
-
-	return h
+	return h, err
 }
 
 func (h *APIHandler) UpdateOdds(
@@ -91,8 +137,8 @@ func (h *APIHandler) UpdateOdds(
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
 
-	if int((percentDuplicate + percentTooMany + percentNonIndex)) > len(h.ActionOdds) {
-		return fmt.Errorf("Total of percents can't be greater than %d", len(h.ActionOdds))
+	if int(percentDuplicate+percentTooMany+percentNonIndex) > len(h.ActionOdds) {
+		return fmt.Errorf("total of percents can't be greater than %d", len(h.ActionOdds))
 	}
 	if int(percentTooLarge) > len(h.MethodOdds) {
 		return fmt.Errorf("percent TooLarge cannot be greater than %d", len(h.MethodOdds))
@@ -190,65 +236,113 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	// { "update": {"_id": "5", "_index": "index1"} }
 	// { "doc": {"my_field": "baz"} }
 
-	var skipNextLine bool
 	var body []byte
 	for scanner.Scan() {
 		b := scanner.Bytes()
 		body = append(body, b...)
-		if skipNextLine || len(b) == 0 {
-			skipNextLine = false
+		if len(b) == 0 {
 			continue
 		}
-		var j map[string]any
-		err := json.Unmarshal(b, &j)
+
+		action, err := h.parseAction(b)
 		if err != nil {
-			log.Printf("error unmarshal: %s", err)
-			continue
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(
+				fmt.Sprintf(`{"error": "failed to parse action: %v"}`, err)))
+			log.Printf("failed to parse action: %v", err)
+			return
 		}
-		if len(j) != 1 {
-			log.Printf("error, number of keys off: %d should be 1", len(j))
-			continue
+
+		// read document for the action. Delete action does not contain a document
+		b = nil
+		if action.Action != "delete" && scanner.Scan() {
+			b = scanner.Bytes()
+			body = append(body, b...)
 		}
-		for k := range j {
-			switch k {
-			case "index":
-				h.metrics.bulkIndexTotalMetrics.Add(context.Background(), 1, attrs)
-				skipNextLine = true
-			case "create":
-				skipNextLine = true
-				actionStatus := h.ActionOdds[rand.Intn(len(h.ActionOdds))]
-				switch actionStatus {
-				case http.StatusOK:
-					h.metrics.bulkCreateOkMetrics.Add(context.Background(), 1, attrs)
-				case http.StatusConflict:
-					br.Errors = true
-					h.metrics.bulkCreateDuplicateMetrics.Add(context.Background(), 1, attrs)
-				case http.StatusTooManyRequests:
-					br.Errors = true
-					h.metrics.bulkCreateTooManyMetrics.Add(context.Background(), 1, attrs)
-				case http.StatusNotAcceptable:
-					br.Errors = true
-					h.metrics.bulkCreateNonIndexMetrics.Add(context.Background(), 1, attrs)
-				}
-				br.Items = append(br.Items, map[string]any{"created": map[string]any{"status": actionStatus}})
-			case "update":
-				h.metrics.bulkUpdateTotalMetrics.Add(context.Background(), 1, attrs)
-				skipNextLine = true
-			case "delete":
-				h.metrics.bulkDeleteTotalMetrics.Add(context.Background(), 1, attrs)
-				skipNextLine = false
-			}
+
+		var actionStatus int
+		var item map[string]any
+		if h.deterministicHandler != nil {
+			actionStatus = h.deterministicHandler(action, b)
+			item = map[string]any{action.Action: map[string]any{"status": actionStatus}}
+		} else if action.Action == "create" {
+			// this is the probabilistic handler, it does nothing for all the
+			// other actions, only create is handled according to the odds.
+			actionStatus = h.ActionOdds[rand.Intn(len(h.ActionOdds))]
+			item = map[string]any{action.Action: map[string]any{"status": actionStatus}}
+		}
+
+		isErr := h.updateMetrics(action.Action, actionStatus, attrs)
+		br.Errors = br.Errors || isErr
+		if len(item) > 0 {
+			br.Items = append(br.Items, item)
 		}
 	}
+
 	h.recordRequest(r, body)
 	brBytes, err := json.Marshal(br)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(
+			fmt.Sprintf(`{"error": "error marshal bulk reply: %v"}`, err)))
 		log.Printf("error marshal bulk reply: %s", err)
 		return
 	}
-	w.Header().Set(http.CanonicalHeaderKey("Content-Type"), "application/json")
-	w.Write(brBytes)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(brBytes)
+
 	return
+}
+
+func (h *APIHandler) parseAction(b []byte) (Action, error) {
+	var j map[string]json.RawMessage
+	err := json.Unmarshal(b, &j)
+	if err != nil {
+		return Action{}, fmt.Errorf("error unmarshal: %s", err)
+
+	}
+	if len(j) != 1 {
+		return Action{}, fmt.Errorf(
+			"error, unexpected number of keys: got %d, it should be 1", len(j))
+	}
+
+	for action, data := range j {
+		return Action{
+			Action: action,
+			Meta:   data,
+		}, nil
+	}
+
+	return Action{}, fmt.Errorf("unexpected error: no action found")
+}
+
+func (h *APIHandler) updateMetrics(action string, actionStatus int, attrs metric.MeasurementOption) bool {
+	var isErr bool
+
+	switch action {
+	case "index":
+		h.metrics.bulkIndexTotalMetrics.Add(context.Background(), 1, attrs)
+	case "create":
+		switch actionStatus {
+		case http.StatusOK:
+			h.metrics.bulkCreateOkMetrics.Add(context.Background(), 1, attrs)
+		case http.StatusConflict:
+			isErr = true
+			h.metrics.bulkCreateDuplicateMetrics.Add(context.Background(), 1, attrs)
+		case http.StatusTooManyRequests:
+			isErr = true
+			h.metrics.bulkCreateTooManyMetrics.Add(context.Background(), 1, attrs)
+		case http.StatusNotAcceptable:
+			isErr = true
+			h.metrics.bulkCreateNonIndexMetrics.Add(context.Background(), 1, attrs)
+		}
+	case "update":
+		h.metrics.bulkUpdateTotalMetrics.Add(context.Background(), 1, attrs)
+	case "delete":
+		h.metrics.bulkDeleteTotalMetrics.Add(context.Background(), 1, attrs)
+	}
+
+	return isErr
 }
 
 // Root handles / get requests
