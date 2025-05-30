@@ -69,7 +69,7 @@ func NewAPIHandler(
 	historyCap uint,
 ) *APIHandler {
 
-	h, err := newAPIHAndler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
+	h, err := newAPIHandler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
 	if err != nil {
 		panic(fmt.Errorf("failed to create APIHandler: %w", err))
 	}
@@ -82,7 +82,7 @@ func NewAPIHandler(
 	return h
 }
 
-// NewDeterministicAPIHandler returns a handler wich which use handler to process
+// NewDeterministicAPIHandler returns a handler which uses handler to process
 // each action in the bulk request.
 func NewDeterministicAPIHandler(
 	uuid fmt.Stringer,
@@ -94,7 +94,7 @@ func NewDeterministicAPIHandler(
 	handler func(action Action, event []byte) int,
 ) *APIHandler {
 
-	h, err := newAPIHAndler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
+	h, err := newAPIHandler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
 	if err != nil {
 		panic(fmt.Errorf("failed to create APIHandler: %w", err))
 	}
@@ -104,7 +104,7 @@ func NewDeterministicAPIHandler(
 	return h
 }
 
-func newAPIHAndler(
+func newAPIHandler(
 	uuid fmt.Stringer,
 	clusterUUID string,
 	meterProvider metric.MeterProvider,
