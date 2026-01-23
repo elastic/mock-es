@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofrs/uuid/v5"
 	"github.com/mileusna/useragent"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -55,26 +56,31 @@ type APIHandler struct {
 	deterministicHandler func(action Action, event []byte) int
 }
 
+type HandlerConfig struct {
+	PercentBulkErr   uint
+	PercentDuplicate uint
+	PercentTooMany   uint
+	PercentNonIndex  uint
+	PercentTooLarge  uint
+	HistoryCap       uint
+	ClusterUUID      string
+	Delay            time.Duration
+}
+
 // NewAPIHandler return handler with Action and Method Odds array filled in
 func NewAPIHandler(
-	uuid fmt.Stringer,
-	clusterUUID string,
+	uid uuid.UUID,
 	meterProvider metric.MeterProvider,
 	expire time.Time,
-	delay time.Duration,
-	percentDuplicate,
-	percentTooMany,
-	percentNonIndex,
-	percentTooLarge,
-	historyCap uint,
+	cfg HandlerConfig,
 ) *APIHandler {
 
-	h, err := newAPIHandler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
+	h, err := newAPIHandler(uid, meterProvider, expire, cfg)
 	if err != nil {
 		panic(fmt.Errorf("failed to create APIHandler: %w", err))
 	}
 
-	err = h.UpdateOdds(percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge)
+	err = h.UpdateOdds(cfg)
 	if err != nil {
 		panic(fmt.Errorf("failed to UpdateOdds: %w", err))
 	}
@@ -86,15 +92,13 @@ func NewAPIHandler(
 // each action in the bulk request.
 func NewDeterministicAPIHandler(
 	uuid fmt.Stringer,
-	clusterUUID string,
 	meterProvider metric.MeterProvider,
 	expire time.Time,
-	delay time.Duration,
-	historyCap uint,
+	cfg HandlerConfig,
 	handler func(action Action, event []byte) int,
 ) *APIHandler {
 
-	h, err := newAPIHandler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
+	h, err := newAPIHandler(uuid, meterProvider, expire, cfg)
 	if err != nil {
 		panic(fmt.Errorf("failed to create APIHandler: %w", err))
 	}
@@ -106,14 +110,12 @@ func NewDeterministicAPIHandler(
 
 func newAPIHandler(
 	uuid fmt.Stringer,
-	clusterUUID string,
 	meterProvider metric.MeterProvider,
 	expire time.Time,
-	delay time.Duration,
-	historyCap uint) (*APIHandler, error) {
+	cfg HandlerConfig) (*APIHandler, error) {
 
 	h := &APIHandler{
-		UUID: uuid, Expire: expire, ClusterUUID: clusterUUID, Delay: delay}
+		UUID: uuid, Expire: expire, ClusterUUID: cfg.ClusterUUID, Delay: cfg.Delay}
 	if meterProvider == nil {
 		meterProvider = otel.GetMeterProvider()
 	}
@@ -124,37 +126,33 @@ func newAPIHandler(
 	}
 	h.metrics = metrics
 
-	h.history = make([]*RequestRecord, historyCap)
+	h.history = make([]*RequestRecord, cfg.HistoryCap)
 	return h, err
 }
 
 func (h *APIHandler) UpdateOdds(
-	percentDuplicate,
-	percentTooMany,
-	percentNonIndex,
-	percentTooLarge uint,
-) error {
+	cfg HandlerConfig) error {
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
 
-	if int(percentDuplicate+percentTooMany+percentNonIndex) > len(h.ActionOdds) {
+	if int(cfg.PercentDuplicate+cfg.PercentTooMany+cfg.PercentNonIndex) > len(h.ActionOdds) {
 		return fmt.Errorf("total of percents can't be greater than %d", len(h.ActionOdds))
 	}
-	if int(percentTooLarge) > len(h.MethodOdds) {
+	if int(cfg.PercentTooLarge+cfg.PercentBulkErr) > len(h.MethodOdds) {
 		return fmt.Errorf("percent TooLarge cannot be greater than %d", len(h.MethodOdds))
 	}
 
 	// Fill in ActionOdds
 	n := 0
-	for i := uint(0); i < percentDuplicate; i++ {
+	for i := uint(0); i < cfg.PercentDuplicate; i++ {
 		h.ActionOdds[n] = http.StatusConflict
 		n++
 	}
-	for i := uint(0); i < percentTooMany; i++ {
+	for i := uint(0); i < cfg.PercentTooMany; i++ {
 		h.ActionOdds[n] = http.StatusTooManyRequests
 		n++
 	}
-	for i := uint(0); i < percentNonIndex; i++ {
+	for i := uint(0); i < cfg.PercentNonIndex; i++ {
 		h.ActionOdds[n] = http.StatusNotAcceptable
 		n++
 	}
@@ -164,8 +162,12 @@ func (h *APIHandler) UpdateOdds(
 
 	// Fill in MethodOdds
 	n = 0
-	for i := uint(0); i < percentTooLarge; i++ {
+	for i := uint(0); i < cfg.PercentTooLarge; i++ {
 		h.MethodOdds[n] = http.StatusRequestEntityTooLarge
+		n++
+	}
+	for i := uint(0); i < cfg.PercentBulkErr; i++ {
+		h.MethodOdds[n] = http.StatusInternalServerError
 		n++
 	}
 	for ; n < len(h.MethodOdds); n++ {
@@ -212,6 +214,12 @@ func (h *APIHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	if methodStatus == http.StatusRequestEntityTooLarge {
 		h.metrics.bulkCreateTooLargeMetrics.Add(context.Background(), 1, attrs)
 		w.WriteHeader(methodStatus)
+		return
+	}
+	if methodStatus == http.StatusInternalServerError {
+		h.metrics.bulkCreateTooLargeMetrics.Add(context.Background(), 1, attrs)
+		w.WriteHeader(methodStatus)
+		w.Write([]byte("500 internal server error"))
 		return
 	}
 

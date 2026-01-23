@@ -24,44 +24,43 @@ import (
 )
 
 var (
-	addr             string
-	expire           time.Time
-	percentDuplicate uint
-	percentTooMany   uint
-	percentNonIndex  uint
-	percentTooLarge  uint
-	historyCap       uint
-	uid              uuid.UUID
-	clusterUUID      string
-	metricsInterval  time.Duration
-	certFile         string
-	keyFile          string
-	delay            time.Duration
-	verbose          bool
+	addr            string
+	expire          time.Time
+	uid             uuid.UUID
+	metricsInterval time.Duration
+	certFile        string
+	keyFile         string
+	verbose         bool
+
+	apiHandlerConfig api.HandlerConfig
 )
 
 func init() {
+	cfg := apiHandlerConfig
 	flag.StringVar(&addr, "addr", ":9200", "address to listen on ip:port")
-	flag.UintVar(&percentDuplicate, "dup", 0, "percent chance StatusConflict is returned for create action")
-	flag.UintVar(&percentTooMany, "toomany", 0, "percent chance StatusTooManyRequests is returned for create action")
-	flag.UintVar(&percentNonIndex, "nonindex", 0, "percent chance StatusNotAcceptable is returned for create action")
-	flag.UintVar(&percentTooLarge, "toolarge", 0, "percent chance StatusEntityTooLarge is returned for POST method on _bulk endpoint")
-	flag.UintVar(&historyCap, "history", 0, "number of request bodies to keep, available on _history endpoint")
-	flag.StringVar(&clusterUUID, "clusteruuid", "", "Cluster UUID of Elasticsearch we are mocking")
+	flag.UintVar(&cfg.PercentDuplicate, "dup", 0, "percent chance StatusConflict is returned for create action")
+	flag.UintVar(&cfg.PercentTooMany, "toomany", 0, "percent chance StatusTooManyRequests is returned for create action")
+	flag.UintVar(&cfg.PercentNonIndex, "nonindex", 0, "percent chance StatusNotAcceptable is returned for create action")
+	flag.UintVar(&cfg.PercentTooLarge, "toolarge", 0, "percent chance StatusEntityTooLarge is returned for POST method on _bulk endpoint")
+	flag.UintVar(&cfg.PercentBulkErr, "bulkerr", 0, "percent chance of returning http 500 for a full bulk request")
+	flag.UintVar(&cfg.HistoryCap, "history", 0, "number of request bodies to keep, available on _history endpoint")
+	flag.StringVar(&cfg.ClusterUUID, "clusteruuid", "", "Cluster UUID of Elasticsearch we are mocking")
 	flag.DurationVar(&metricsInterval, "metrics", 0, "Go 'time.Duration' to wait between printing metrics to stdout, 0 is no metrics")
 	flag.StringVar(&certFile, "certfile", "", "path to PEM certificate file, empty sting is no TLS")
 	flag.StringVar(&keyFile, "keyfile", "", "path to PEM private key file, empty sting is no TLS")
-	flag.DurationVar(&delay, "delay", 0, "Go 'time.Duration' to wait before processing API request, 0 is no delay")
+	flag.DurationVar(&cfg.Delay, "delay", 0, "Go 'time.Duration' to wait before processing API request, 0 is no delay")
 	flag.BoolVar(&verbose, "verbose", false, "Enable verbosity, show non error messages")
 
 	uid = uuid.Must(uuid.NewV4())
 	expire = time.Now().Add(24 * time.Hour)
 	flag.Parse()
-	if (percentDuplicate + percentTooMany + percentNonIndex) > 100 {
-		log.Fatalf("Total of create action percentages must not be more than 100.\nd: %d, t:%d, n:%d", percentDuplicate, percentTooMany, percentNonIndex)
+	if (cfg.PercentDuplicate + cfg.PercentTooMany + cfg.PercentNonIndex) > 100 {
+		log.Fatalf("Total of create action percentages must not be more than 100.\nd: %d, t:%d, n:%d",
+			cfg.PercentDuplicate, cfg.PercentTooMany, cfg.PercentNonIndex)
 	}
-	if percentTooLarge > 100 {
-		log.Fatalf("percentage StatusEntityTooLarge must be less than 100")
+	if (cfg.PercentTooLarge + cfg.PercentBulkErr) > 100 {
+		log.Fatalf("Total of TooLarge and BulkErr percentages must not be more than 100.\nt:%d, b:%d",
+			cfg.PercentTooLarge, cfg.PercentBulkErr)
 	}
 }
 
@@ -105,7 +104,7 @@ func main() {
 		}()
 	}
 
-	apiHandler := http.Handler(api.NewAPIHandler(uid, clusterUUID, provider, expire, delay, percentDuplicate, percentTooMany, percentNonIndex, percentTooLarge, historyCap))
+	apiHandler := http.Handler(api.NewAPIHandler(uid, provider, expire, apiHandlerConfig))
 	if verbose {
 		apiHandler = loggingMiddleware(apiHandler)
 	}
