@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+var DefaultClusterUUID = "580445a9-f89f-429f-a84f-14956e5ad968"
+
 // BulkResponse is an Elastic Search Bulk Response, assuming
 // filter_path is "errors,items.*.error,items.*.status"
 type BulkResponse struct {
@@ -71,7 +73,7 @@ func NewAPIHandler(
 
 	// Always set a cluster UUID, so things like Beats monitoring always work
 	if clusterUUID == "" {
-		clusterUUID = "580445a9-f89f-429f-a84f-14956e5ad968"
+		clusterUUID = DefaultClusterUUID
 	}
 
 	h, err := newAPIHandler(uuid, clusterUUID, meterProvider, expire, delay, historyCap)
